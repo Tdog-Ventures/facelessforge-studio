@@ -2,13 +2,23 @@
 
 VideoForge is an independent React/Vite frontend for the existing OptiVid FastAPI backend. It runs locally on `http://localhost:3000`, calls the configured API directly, and does not proxy, deploy, restart, SSH to, or modify the backend or production site.
 
-## Local setup
+## Environment configuration
 
-Create a `.env` file from `.env.example` and keep the browser-exposed endpoint as:
+The endpoint is public browser configuration, not a secret. For local development, use `.env.development` with a direct browser call to the existing FastAPI service:
 
 ```env
 VITE_API_BASE=http://91.99.162.143:8000
 ```
+
+For an HTTPS production build, use `.env.production` with the existing HTTPS proxy path to avoid mixed-content blocking:
+
+```env
+VITE_API_BASE=https://facelessforge.ethinx.solutions/api/videoforge
+```
+
+`.env.example` contains the local default and documents the production override. Vite injects the selected `VITE_API_BASE` value at build time; the client then calls `${VITE_API_BASE}/api/v1/...` directly from the browser.
+
+## Local setup
 
 Then run:
 
@@ -17,7 +27,7 @@ npm install
 npm run dev
 ```
 
-The interface calls endpoints under `${VITE_API_BASE}/api/v1/`, including job creation, status polling, logs, SSE progress, history, and output downloads. The frontend reports CORS and mixed-content failures visibly rather than attempting to alter the backend. When a frontend is served over HTTPS, browsers may block the configured HTTP API endpoint; use local HTTP development or a separately configured HTTPS API gateway.
+The interface calls endpoints under `${VITE_API_BASE}/api/v1/`, including job creation, status polling, logs, SSE progress, history, and output downloads. The frontend reports CORS and network failures visibly rather than attempting to alter the backend. Local development remains isolated and does not contact the production site; production configuration only selects the existing HTTPS proxy URL.
 
 ## Included workflows
 

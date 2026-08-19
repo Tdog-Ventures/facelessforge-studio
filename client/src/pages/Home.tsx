@@ -13,8 +13,8 @@ import { Progress } from "@/components/ui/progress";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { API_BASE, api, friendlyApiError, getApiBase } from "@/lib/api";
+import { buildUploadFormData, normalizeStatus, type BackendStatus } from "@/lib/contracts";
 
-type BackendStatus = "queued" | "running" | "processing" | "passed" | "completed" | "failed";
 type JobStatus = "queued" | "running" | "passed" | "failed";
 type Stage = "script generation" | "TTS" | "scene assembly" | "encoding" | "validation";
 type Job = { id: string; status: JobStatus; backendStatus?: BackendStatus; topic?: string; preset?: string; platform?: string; created_at?: string; createdAt?: string; progress?: number; stage?: Stage; elapsed?: number; error?: string; outputs?: string[]; validation?: Record<string, unknown>; };
@@ -24,11 +24,6 @@ const STAGES: Stage[] = ["script generation", "TTS", "scene assembly", "encoding
 const presets = ["viral", "cinematic", "clean", "podcast"];
 const platforms = ["tiktok", "youtube", "instagram", "generic"];
 
-function normalizeStatus(status?: BackendStatus): JobStatus {
-  if (status === "processing") return "running";
-  if (status === "completed") return "passed";
-  return status === "running" || status === "passed" || status === "failed" ? status : "queued";
-}
 function statusTone(status: JobStatus) {
   return { queued: "status-queued", running: "status-running", passed: "status-passed", failed: "status-failed" }[status];
 }
@@ -90,12 +85,8 @@ export default function Home() {
   async function startJob(file?: File) {
     setLoading(true); setError("");
     try {
-      const form = new FormData();
-      if (file) form.append("file", file);
-      form.append("preset", preset); form.append("platform", platform);
-      let override: Record<string, unknown> = {};
-      try { override = settingsOverride.trim() ? JSON.parse(settingsOverride) : {}; } catch { throw new Error("Settings override must be valid JSON."); }
-      form.append("settings_override", JSON.stringify({ ...override, duration: Number(duration), voice_model: voiceModel, footage_source: footageSource }));
+      if (!file) throw new Error("Choose a source file before starting generation.");
+      const form = buildUploadFormData(file, preset, platform, settingsOverride, duration, voiceModel, footageSource);
       const created = await api("/api/v1/jobs", { method: "POST", body: form });
       const job = normalizeJob(created.job || created); setJobs(current => [job, ...current.filter(item => item.id !== job.id)]); setSelected(job); setView("overview");
     } catch (e) { setError(friendlyError(e)); }

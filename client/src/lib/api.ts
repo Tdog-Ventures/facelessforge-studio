@@ -1,6 +1,9 @@
-export const DEFAULT_API_BASE = "http://91.99.162.143:8000";
-export function getApiBase() { return (localStorage.getItem("vf.apiBase") || import.meta.env.VITE_API_BASE || DEFAULT_API_BASE).replace(/\/$/, ""); }
-export const API_BASE = getApiBase();
+export function getApiBase(envBase = import.meta.env.VITE_API_BASE) {
+  const browserOverride = typeof localStorage !== "undefined" ? localStorage.getItem("vf.apiBase") : null;
+  return (browserOverride || envBase || "").replace(/\/$/, "");
+}
+
+export const API_BASE = import.meta.env.VITE_API_BASE || "";
 
 export async function api(path: string, init?: RequestInit) {
   const response = await fetch(`${getApiBase()}${path}`, init);
