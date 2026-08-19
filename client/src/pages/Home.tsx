@@ -1,134 +1,286 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Activity, ArrowUpRight, Check, ChevronRight, CircleAlert, Clock3, Download,
-  FileJson, Film, Gauge, History, KeyRound, LayoutDashboard, Loader2,
-  MonitorPlay, MoreHorizontal, PanelLeft, Play, Plus, RefreshCw, Rocket,
-  ScrollText, Settings2, Sparkles, UploadCloud, WifiOff, X,
+  AlertTriangle, Archive, ArrowRight, CheckCircle2, ChevronRight, CirclePlus,
+  FolderKanban, Gauge, LayoutDashboard, Loader2, LogOut, Menu, Pencil,
+  Plus, RefreshCw, ShieldCheck, Sparkles, Trash2, Users, X,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { api, friendlyApiError, withApiAuth } from "@/lib/api";
+import {
+  extractProject, extractProjects, extractSession, formatProjectDate,
+  type ApiUser, type AuthSession, type Project, type ProjectInput, type ProjectStatus,
+  projectPayload, normalizeUser,
+} from "@/lib/contracts";
 import { cn } from "@/lib/utils";
-import { API_BASE, api, friendlyApiError, getApiBase } from "@/lib/api";
-import { buildUploadFormData, normalizeStatus, type BackendStatus } from "@/lib/contracts";
 
-type JobStatus = "queued" | "running" | "passed" | "failed";
-type Stage = "script generation" | "TTS" | "scene assembly" | "encoding" | "validation";
-type Job = { id: string; status: JobStatus; backendStatus?: BackendStatus; topic?: string; preset?: string; platform?: string; created_at?: string; createdAt?: string; progress?: number; stage?: Stage; elapsed?: number; error?: string; outputs?: string[]; validation?: Record<string, unknown>; };
+type View = "overview" | "projects";
+type LoadState = "idle" | "loading" | "ready" | "error";
+type AuthMode = "login" | "register";
 
-const OUTPUTS = ["final_13min_spoken.mp4", "pexels_ids.json", "diversity_check.json", "scene_manifest_linear_fixed.json"];
-const STAGES: Stage[] = ["script generation", "TTS", "scene assembly", "encoding", "validation"];
-const presets = ["viral", "cinematic", "clean", "podcast"];
-const platforms = ["tiktok", "youtube", "instagram", "generic"];
+const SESSION_STORAGE_KEY = "facelessforge.session";
 
-function statusTone(status: JobStatus) {
-  return { queued: "status-queued", running: "status-running", passed: "status-passed", failed: "status-failed" }[status];
+function loadStoredSession(): AuthSession | null {
+  try {
+    const saved = localStorage.getItem(SESSION_STORAGE_KEY);
+    if (!saved) return null;
+    const parsed = JSON.parse(saved) as AuthSession;
+    return parsed?.user ? { token: parsed.token, user: normalizeUser(parsed.user) } : null;
+  } catch {
+    return null;
+  }
 }
-function formatDate(value?: string) { return value ? new Date(value).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "Just now"; }
-function normalizeJob(raw: any): Job { return { ...raw, id: String(raw.id || raw.job_id || raw.jobId), backendStatus: raw.status, status: normalizeStatus(raw.status), progress: raw.progress ?? raw.percent ?? 0 }; }
-function friendlyError(error: unknown) { return friendlyApiError(error); }
 
+function storeSession(session: AuthSession | null) {
+  if (!session) localStorage.removeItem(SESSION_STORAGE_KEY);
+  else localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+}
+
+function apiInit(session: AuthSession | null, init: RequestInit = {}): RequestInit {
+  return {
+    ...init,
+    credentials: "include",
+    headers: withApiAuth(session?.token, init.headers),
+  };
+}
 
 export default function Home() {
-  const [view, setView] = useState<"overview" | "new" | "history" | "settings">("overview");
-  const [jobs, setJobs] = useState<Job[]>([]);
-  const [selected, setSelected] = useState<Job | null>(null);
-  const [topic, setTopic] = useState("");
-  const [preset, setPreset] = useState("viral");
-  const [platform, setPlatform] = useState("youtube");
-  const [duration, setDuration] = useState("13");
-  const [voiceModel, setVoiceModel] = useState("eleven_multilingual_v2");
-  const [footageSource, setFootageSource] = useState("Pexels library");
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [settingsOverride, setSettingsOverride] = useState("{}");
-  const [voice, setVoice] = useState(() => localStorage.getItem("vf.voice") || "Bella");
-  const [model, setModel] = useState(() => localStorage.getItem("vf.model") || "eleven_multilingual_v2");
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem("vf.apiKey") || "");
-  const [apiBase, setApiBase] = useState(() => getApiBase());
-  const [now, setNow] = useState(() => Date.now());
-  const [logs, setLogs] = useState<string[]>([]);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const eventSources = useRef<Record<string, EventSource>>({});
+  const [session, setSession] = useState<AuthSession | null>(() => loadStoredSession());
+  const [view, setView] = useState<View>("overview");
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectState, setProjectState] = useState<LoadState>("idle");
+  const [projectError, setProjectError] = useState("");
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [editor, setEditor] = useState<{ project?: Project } | null>(null);
+  const [deleting, setDeleting] = useState<Project | null>(null);
 
-  const loadJobs = useCallback(async () => {
-    try { const data = await api("/api/v1/jobs?limit=50&offset=0"); setJobs((Array.isArray(data) ? data : data.jobs || []).map(normalizeJob)); setError(""); }
-    catch (e) { setError(friendlyError(e)); }
-  }, []);
-
-  useEffect(() => { loadJobs(); const id = window.setInterval(loadJobs, 3000); return () => window.clearInterval(id); }, [loadJobs]);
-  useEffect(() => { const id = window.setInterval(() => setNow(Date.now()), 1000); return () => window.clearInterval(id); }, []);
-  useEffect(() => { if (!selected || !["queued", "running"].includes(selected.status)) return; const loadLogs = async () => { try { const data = await api(`/api/v1/jobs/${selected.id}/logs`); const next = Array.isArray(data) ? data : data.logs || []; setLogs(current => next.length >= current.length ? next : [...current, ...next.filter((line: string) => !current.includes(line))]); } catch (e) { setError(friendlyError(e)); } }; loadLogs(); const id = window.setInterval(loadLogs, 3000); return () => window.clearInterval(id); }, [selected?.id, selected?.status]);
-  useEffect(() => () => Object.values(eventSources.current).forEach(source => source.close()), []);
+  const loadProjects = useCallback(async () => {
+    if (!session) return;
+    setProjectState("loading");
+    setProjectError("");
+    try {
+      const payload = await api<unknown>("/api/projects", apiInit(session));
+      setProjects(extractProjects(payload));
+      setProjectState("ready");
+    } catch (error) {
+      setProjectState("error");
+      setProjectError(friendlyApiError(error));
+    }
+  }, [session]);
 
   useEffect(() => {
-    jobs.filter(job => ["queued", "running"].includes(job.status)).forEach(job => {
-      if (eventSources.current[job.id]) return;
-      try {
-        const source = new EventSource(`${API_BASE}/api/v1/jobs/${job.id}/stream`);
-        source.onmessage = event => { try { const payload = normalizeJob(JSON.parse(event.data)); setJobs(current => current.map(item => item.id === job.id ? { ...item, ...payload } : item)); } catch { setLogs(current => [...current.slice(-80), event.data]); } };
-        source.onerror = () => { source.close(); delete eventSources.current[job.id]; };
-        eventSources.current[job.id] = source;
-      } catch { /* polling remains active */ }
-    });
-  }, [jobs]);
+    if (session) void loadProjects();
+    else {
+      setProjects([]);
+      setProjectState("idle");
+      setProjectError("");
+    }
+  }, [loadProjects, session]);
 
-  const activeJobs = jobs.filter(job => ["queued", "running"].includes(job.status));
-  const passedJobs = jobs.filter(job => job.status === "passed");
-  const selectedProgress = selected?.progress ?? (selected?.status === "passed" ? 100 : 0);
-  const elapsedFor = (job: Job) => { const start = job.created_at || job.createdAt; return start && ["queued", "running"].includes(job.status) ? Math.max(0, Math.floor((now - new Date(start).getTime()) / 1000)) : job.elapsed ?? 0; };
+  const persistSession = (next: AuthSession | null) => {
+    storeSession(next);
+    setSession(next);
+  };
 
-  async function startJob(file?: File) {
-    setLoading(true); setError("");
+  const handleLogout = async () => {
+    setIsMenuOpen(false);
     try {
-      if (!file) throw new Error("Choose a source file before starting generation.");
-      const form = buildUploadFormData(file, preset, platform, settingsOverride, duration, voiceModel, footageSource);
-      const created = await api("/api/v1/jobs", { method: "POST", body: form });
-      const job = normalizeJob(created.job || created); setJobs(current => [job, ...current.filter(item => item.id !== job.id)]); setSelected(job); setView("overview");
-    } catch (e) { setError(friendlyError(e)); }
-    finally { setLoading(false); }
-  }
-  async function selectJob(job: Job) {
-    setSelected(job); setLogs([]);
-    try { const detail = await api(`/api/v1/jobs/${job.id}`); setSelected({ ...job, ...normalizeJob(detail) }); const logData = await api(`/api/v1/jobs/${job.id}/logs`); setLogs(Array.isArray(logData) ? logData : logData.logs || []); }
-    catch (e) { setError(friendlyError(e)); }
-  }
-  function saveSettings() { localStorage.setItem("vf.voice", voice); localStorage.setItem("vf.model", model); localStorage.setItem("vf.apiKey", apiKey); setError(""); }
-  const currentStage = selected?.stage || (selected?.status === "passed" ? "validation" : "script generation");
+      await api<unknown>("/api/auth/logout", apiInit(session, { method: "POST" }));
+    } catch {
+      // Local session clearance is intentionally available even when the service is down.
+    } finally {
+      persistSession(null);
+      setView("overview");
+    }
+  };
 
-  return <div className="app-shell">
-    <aside className="sidebar">
-      <div className="brand"><div className="brand-mark"><Sparkles size={17} /></div><div><div className="brand-name">VideoForge</div><div className="brand-sub">AI production studio</div></div></div>
-      <div className="workspace-pill"><span className="avatar">OF</span><span>OptiVid workspace</span><MoreHorizontal size={16} className="muted" /></div>
-      <nav className="nav-list">
-        {([ { key: "overview", Icon: LayoutDashboard, label: "Overview" }, { key: "new", Icon: Plus, label: "New job" }, { key: "history", Icon: History, label: "Job history" }, { key: "settings", Icon: Settings2, label: "Settings" } ] as const).map(({ key, Icon, label }) => <button key={key} className={cn("nav-item", view === key && "active")} onClick={() => setView(key)}><Icon size={17} />{label}<ChevronRight size={14} className="nav-chevron" /></button>)}
-      </nav>
-      <div className="sidebar-bottom"><div className="system-card"><div className="system-dot" /><div><strong>API connection</strong><span>{API_BASE.replace("http://", "")}</span></div><WifiOff size={15} className="muted" /></div><div className="user-chip"><div className="avatar avatar-small">OF</div><div><strong>OptiVid creator</strong><span>Local workspace</span></div><MoreHorizontal size={15} className="muted" /></div></div>
-    </aside>
-    <main className="main-content">
-      <header className="topbar"><div className="mobile-brand"><div className="brand-mark"><Sparkles size={15} /></div>VideoForge</div><div className="crumb"><span>Studio</span><ChevronRight size={14} /><strong>{view === "overview" ? "Overview" : view === "new" ? "New job" : view === "history" ? "Job history" : "Settings"}</strong></div><div className="top-actions"><div className="api-status"><span className="status-pulse" /> API connected</div><button className="icon-button"><PanelLeft size={18} /></button></div></header>
-      {error && <div className="error-banner"><CircleAlert size={17} /><span>{error}</span><button onClick={() => setError("")}><X size={15} /></button></div>}
-      {view === "overview" && <>
-        <section className="hero-row"><div><div className="eyebrow">OptiVid / VideoForge - Proven 13min Pipeline</div><h1>Build videos that<br /><em>move people.</em></h1><p className="hero-copy">Turn a single idea into a complete, platform-ready video with intelligent scripting, voice, scenes, and validation.</p></div><button className="primary-button hero-cta" onClick={() => setView("new")}><Rocket size={18} /> Start a new job <ArrowUpRight size={17} /></button></section>
-        <section className="metric-grid"><Metric icon={<Activity />} label="Active jobs" value={String(activeJobs.length).padStart(2, "0")} tone="violet" /><Metric icon={<Check />} label="Passed outputs" value={String(passedJobs.length).padStart(2, "0")} tone="mint" /><Metric icon={<Gauge />} label="Avg. completion" value="—" tone="amber" /><Metric icon={<Clock3 />} label="Last run" value={jobs[0] ? formatDate(jobs[0].created_at || jobs[0].createdAt).split(",")[0] : "—"} tone="blue" /></section>
-        <section className="content-grid"><div className="panel-card jobs-panel"><div className="panel-heading"><div><div className="eyebrow">LIVE PIPELINE</div><h2>Recent jobs</h2></div><button className="text-button" onClick={() => setView("history")}>View all <ArrowUpRight size={14} /></button></div>{jobs.length === 0 ? <EmptyState onClick={() => setView("new")} /> : <div className="job-list">{jobs.slice(0, 5).map(job => <JobRow key={job.id} job={job} elapsed={elapsedFor(job)} onClick={() => selectJob(job)} />)}</div>}</div><div className="panel-card signal-panel"><div className="panel-heading"><div><div className="eyebrow">WORKSPACE SIGNAL</div><h2>Studio health</h2></div><Activity size={17} className="accent-icon" /></div><div className="signal-orb"><div className="orb-core" /><div className="orb-ring orb-ring-one" /><div className="orb-ring orb-ring-two" /></div><div className="signal-caption"><strong>Ready to create</strong><span>All systems are standing by for your next idea.</span></div><div className="signal-bars"><span /><span /><span /><span /><span /><span /><span /><span /><span /><span /></div></div></section>
-      </>}
-      {view === "new" && <NewJob topic={topic} setTopic={setTopic} preset={preset} setPreset={setPreset} platform={platform} setPlatform={setPlatform} duration={duration} setDuration={setDuration} voiceModel={voiceModel} setVoiceModel={setVoiceModel} footageSource={footageSource} setFootageSource={setFootageSource} settingsOverride={settingsOverride} setSettingsOverride={setSettingsOverride} selectedFile={selectedFile} onFile={file => { if (file.size > 500 * 1024 * 1024) { setError("This source file is larger than the 500 MB limit."); return; } if (!file.type.startsWith("video/") && !file.type.startsWith("audio/")) { setError("Choose a video or audio source file."); return; } setSelectedFile(file); setError(""); }} onStart={() => startJob(selectedFile || undefined)} loading={loading} inputRef={inputRef} />}
-      {view === "history" && <section className="page-section"><div className="page-heading"><div><div className="eyebrow">ARCHIVE / ALL RUNS</div><h1>Job history</h1><p>Every generation, tracked from first prompt to final validation.</p></div><button className="primary-button" onClick={() => setView("new")}><Plus size={17} /> New job</button></div><div className="panel-card history-card">{jobs.length ? jobs.map(job => <JobRow key={job.id} job={job} elapsed={elapsedFor(job)} onClick={() => selectJob(job)} />) : <EmptyState onClick={() => setView("new")} />}</div></section>}
-      {view === "settings" && <SettingsView apiBase={apiBase} setApiBase={setApiBase} voice={voice} setVoice={setVoice} model={model} setModel={setModel} apiKey={apiKey} setApiKey={setApiKey} save={() => { localStorage.setItem("vf.apiBase", apiBase.replace(/\/$/, "")); saveSettings(); window.location.reload(); }} />}
-    </main>
-    {selected && <JobDrawer job={selected} progress={selectedProgress} stage={currentStage} logs={logs} onClose={() => setSelected(null)} onRefresh={() => selectJob(selected)} />}
+  const activeProjects = projects.filter(project => project.status === "active");
+  const drafts = projects.filter(project => project.status === "draft");
+  const latestProject = [...projects].sort((a, b) => (b.updatedAt || b.createdAt || "").localeCompare(a.updatedAt || a.createdAt || ""))[0];
+
+  if (!session) {
+    return <AuthScreen onAuthenticated={persistSession} />;
+  }
+
+  return (
+    <div className="forge-shell">
+      <aside className="forge-sidebar" aria-label="Workspace navigation">
+        <Brand />
+        <div className="workspace-label"><span className="workspace-pulse" /> PRIVATE WORKSPACE</div>
+        <nav className="forge-nav">
+          <NavButton icon={LayoutDashboard} label="Overview" active={view === "overview"} onClick={() => setView("overview")} />
+          <NavButton icon={FolderKanban} label="Projects" active={view === "projects"} onClick={() => setView("projects")} count={projects.length || undefined} />
+        </nav>
+        <div className="sidebar-bottom">
+          <div className={cn("connection-card", projectState === "error" && "connection-error")}> 
+            <span className="connection-dot" />
+            <div><strong>{projectState === "error" ? "Service unavailable" : "API workspace"}</strong><small>{projectState === "error" ? "Requests are paused" : "Direct API connection"}</small></div>
+          </div>
+          <button className="user-identity" onClick={() => setIsMenuOpen(value => !value)} aria-expanded={isMenuOpen}>
+            <span className="user-initials">{initials(session.user)}</span>
+            <span><strong>{session.user.name}</strong><small>{session.user.role || "Member"}</small></span>
+            <ChevronRight size={16} />
+          </button>
+          {isMenuOpen && <div className="account-menu"><span>{session.user.email || "Signed in"}</span><button onClick={handleLogout}><LogOut size={15} /> Sign out</button></div>}
+        </div>
+      </aside>
+
+      <main className="forge-main">
+        <header className="forge-topbar">
+          <button className="mobile-menu" onClick={() => setIsMenuOpen(value => !value)} aria-label="Open account menu"><Menu size={19} /></button>
+          <div className="mobile-logo"><Sparkles size={15} /> FAC ELESSFORGE</div>
+          <div className="breadcrumbs"><span>Studio</span><ChevronRight size={14} /><strong>{view === "overview" ? "Overview" : "Projects"}</strong></div>
+          <button className={cn("service-indicator", projectState === "error" && "is-offline")} onClick={() => void loadProjects()} title="Refresh projects">
+            {projectState === "loading" ? <Loader2 size={13} className="spin" /> : <span />}
+            {projectState === "error" ? "Service offline" : projectState === "loading" ? "Loading" : "API connected"}
+          </button>
+        </header>
+
+        {projectState === "error" && <ServiceAlert message={projectError} onRetry={() => void loadProjects()} />}
+
+        {view === "overview" ? (
+          <Overview
+            projectState={projectState}
+            projects={projects}
+            activeProjects={activeProjects}
+            drafts={drafts}
+            latestProject={latestProject}
+            onNewProject={() => setEditor({})}
+            onViewProjects={() => setView("projects")}
+            onEditProject={project => setEditor({ project })}
+          />
+        ) : (
+          <ProjectsPage
+            projects={projects}
+            state={projectState}
+            onNewProject={() => setEditor({})}
+            onEditProject={project => setEditor({ project })}
+            onDeleteProject={setDeleting}
+            onRetry={() => void loadProjects()}
+          />
+        )}
+      </main>
+
+      {editor && <ProjectEditor
+        project={editor.project}
+        session={session}
+        onClose={() => setEditor(null)}
+        onSaved={project => {
+          setProjects(current => editor.project ? current.map(item => item.id === project.id ? project : item) : [project, ...current]);
+          setProjectState("ready");
+          setProjectError("");
+          setEditor(null);
+        }}
+      />}
+      {deleting && <DeleteDialog project={deleting} session={session} onClose={() => setDeleting(null)} onDeleted={id => { setProjects(current => current.filter(project => project.id !== id)); setDeleting(null); }} />}
+    </div>
+  );
+}
+
+function AuthScreen({ onAuthenticated }: { onAuthenticated: (session: AuthSession) => void }) {
+  const [mode, setMode] = useState<AuthMode>("login");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setSubmitting(true);
+    setError("");
+    try {
+      const body = mode === "register" ? { name: name.trim(), email: email.trim(), password } : { email: email.trim(), password };
+      const payload = await api<unknown>(`/api/auth/${mode === "login" ? "login" : "register"}`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const session = extractSession(payload);
+      onAuthenticated(session);
+    } catch (requestError) {
+      setError(friendlyApiError(requestError));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return <div className="auth-shell">
+    <div className="auth-aurora auth-aurora-one" /><div className="auth-aurora auth-aurora-two" />
+    <section className="auth-story">
+      <Brand />
+      <div className="auth-copy"><span className="eyebrow"><span className="workspace-pulse" /> PRODUCTION CONTROL ROOM</span><h1>Build your next<br /><em>story world.</em></h1><p>FacelessForge gives your content operation a calm place to organize the projects that become remarkable videos.</p></div>
+      <div className="auth-notes"><span><CheckCircle2 size={15} /> Project-led workflow</span><span><ShieldCheck size={15} /> Direct API connection</span><span><Users size={15} /> Built for creative teams</span></div>
+    </section>
+    <section className="auth-panel"><div className="auth-card">
+      <div className="auth-card-head"><span className="eyebrow">{mode === "login" ? "WELCOME BACK" : "CREATE WORKSPACE ACCESS"}</span><h2>{mode === "login" ? "Sign in to your studio." : "Start shaping the pipeline."}</h2><p>{mode === "login" ? "Use your existing account to continue where your team left off." : "Create an account to begin managing video projects."}</p></div>
+      {error && <div className="inline-error"><AlertTriangle size={16} /><span>{error}</span></div>}
+      <form className="auth-form" onSubmit={submit}>
+        {mode === "register" && <label>Display name<input value={name} onChange={event => setName(event.target.value)} placeholder="Your name" autoComplete="name" required /></label>}
+        <label>Work email<input value={email} onChange={event => setEmail(event.target.value)} type="email" placeholder="you@studio.com" autoComplete="email" required /></label>
+        <label>Password<input value={password} onChange={event => setPassword(event.target.value)} type="password" placeholder="Enter your password" autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={8} required /></label>
+        <button className="action-button full" disabled={submitting}>{submitting ? <Loader2 className="spin" size={17} /> : <ArrowRight size={17} />}{submitting ? "Connecting…" : mode === "login" ? "Enter the studio" : "Create account"}</button>
+      </form>
+      <p className="auth-switch">{mode === "login" ? "New to FacelessForge?" : "Already have an account?"}<button onClick={() => { setMode(value => value === "login" ? "register" : "login"); setError(""); }}>{mode === "login" ? "Create an account" : "Sign in"}</button></p>
+      <p className="auth-footnote">Requests go directly to the configured API. If the service is unavailable, this page will show the response without attempting any backend recovery.</p>
+    </div></section>
   </div>;
 }
 
-function Metric({ icon, label, value, tone }: { icon: React.ReactNode; label: string; value: string; tone: string }) { return <div className="metric-card"><div className={cn("metric-icon", tone)}>{icon}</div><div><span>{label}</span><strong>{value}</strong></div><ArrowUpRight size={15} className="metric-arrow" /></div>; }
-function EmptyState({ onClick }: { onClick: () => void }) { return <div className="empty-state"><div className="empty-icon"><Film size={22} /></div><strong>No jobs yet</strong><span>Your next production starts with one good idea.</span><button className="text-button" onClick={onClick}>Create your first job <ArrowUpRight size={14} /></button></div>; }
-function JobRow({ job, elapsed, onClick }: { job: Job; elapsed: number; onClick: () => void }) { return <button className="job-row" onClick={onClick}><div className="job-thumb"><Film size={17} /></div><div className="job-main"><strong>{job.topic || `Video job ${job.id.slice(0, 8)}`}</strong><span>{formatDate(job.created_at || job.createdAt)} · {job.id}</span></div><Badge className={cn("status-badge", statusTone(job.status))}>{job.status}</Badge>{["queued", "running"].includes(job.status) && <span className="elapsed-chip"><Clock3 size={12} /> {Math.floor(elapsed / 60)}:{String(elapsed % 60).padStart(2, "0")}</span>}<div className="job-progress"><span>{job.progress ?? (job.status === "passed" ? 100 : 0)}%</span><Progress value={job.progress ?? (job.status === "passed" ? 100 : 0)} /></div><ChevronRight size={17} className="muted" /></button>; }
-function NewJob({ topic, setTopic, preset, setPreset, platform, setPlatform, duration, setDuration, voiceModel, setVoiceModel, footageSource, setFootageSource, settingsOverride, setSettingsOverride, selectedFile, onStart, loading, onFile, inputRef }: { topic: string; setTopic: (value: string) => void; preset: string; setPreset: (value: string) => void; platform: string; setPlatform: (value: string) => void; duration: string; setDuration: (value: string) => void; voiceModel: string; setVoiceModel: (value: string) => void; footageSource: string; setFootageSource: (value: string) => void; settingsOverride: string; setSettingsOverride: (value: string) => void; selectedFile: File | null; onStart: () => void; loading: boolean; onFile: (file: File) => void; inputRef: React.RefObject<HTMLInputElement | null> }) { const [dragging, setDragging] = useState(false); return <section className="page-section new-job-page"><div className="page-heading"><div><div className="eyebrow">NEW PRODUCTION / STEP 01</div><h1>Give it a direction.</h1><p>Set the creative brief and let VideoForge handle the heavy lifting.</p></div><div className="step-indicator"><span className="step-active">01</span><span>02</span><span>03</span></div></div><div className="new-job-grid"><div className="panel-card form-card"><label>Creative topic <span>Required</span></label><Textarea value={topic} onChange={e => setTopic(e.target.value)} placeholder="e.g. The hidden psychology behind great product launches" className="topic-area" /><div className="field-hint">{topic.length}/500 characters</div><div className="form-row"><div><label>Preset</label><select value={preset} onChange={e => setPreset(e.target.value)}>{presets.map((item: string) => <option key={item}>{item}</option>)}</select></div><div><label>Platform</label><select value={platform} onChange={e => setPlatform(e.target.value)}>{platforms.map((item: string) => <option key={item}>{item}</option>)}</select></div></div><div className="form-row"><div><label>Duration</label><select value={duration} onChange={e => setDuration(e.target.value)}><option value="1">1 minute</option><option value="3">3 minutes</option><option value="5">5 minutes</option><option value="13">13 minutes</option></select></div><div><label>Voice model</label><select value={voiceModel} onChange={e => setVoiceModel(e.target.value)}><option>eleven_multilingual_v2</option><option>eleven_turbo_v2_5</option><option>eleven_flash_v2_5</option></select></div></div><label>Footage source</label><select value={footageSource} onChange={e => setFootageSource(e.target.value)}><option>Pexels library</option><option>Uploaded source</option></select><label>Settings override <span>Optional JSON</span></label><Textarea value={settingsOverride} onChange={e => setSettingsOverride(e.target.value)} className="settings-area" placeholder='{"duration": 13, "voice": "Bella"}' /><div className="form-footer"><span className="secure-note"><KeyRound size={14} /> Settings stay in your browser</span><button className="primary-button" disabled={loading || !topic.trim() || !selectedFile} onClick={() => onStart()}>{loading ? <Loader2 className="spin" size={17} /> : <Rocket size={17} />} {loading ? "Starting…" : "Start generation"}</button></div></div><div className="panel-card upload-card" onDragOver={e => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={e => { e.preventDefault(); setDragging(false); onFile(e.dataTransfer.files[0]); }}><div className={cn("dropzone", dragging && "dragging")} onClick={() => inputRef.current?.click()}><input ref={inputRef} type="file" hidden accept="video/*,audio/*" onChange={e => e.target.files?.[0] && onFile(e.target.files[0])} /><div className="upload-icon"><UploadCloud size={22} /></div><strong>Drop a source file here</strong><span>or browse from your computer</span><small>MP4, MOV, MP3 · up to 500 MB</small></div>{selectedFile && <div className="selected-file"><Film size={14} /><span>{selectedFile.name} · {(selectedFile.size / 1024 / 1024).toFixed(1)} MB</span><Check size={14} /></div>}<div className="source-note"><div className="source-mark">P</div><div><strong>Pexels footage library</strong><span>Smart stock footage is available during scene assembly.</span></div><Check size={16} className="check-icon" /></div></div></div></section>; }
-function JobDrawer({ job, progress, stage, logs, onClose, onRefresh }: { job: Job; progress: number; stage: Stage; logs: string[]; onClose: () => void; onRefresh: () => void }) { return <div className="drawer-backdrop" onClick={onClose}><aside className="job-drawer" onClick={e => e.stopPropagation()}><div className="drawer-head"><div><div className="eyebrow">JOB DETAIL</div><h2>{job.topic || `Video job ${job.id.slice(0, 8)}`}</h2><span className="drawer-id">{job.id}</span></div><button className="icon-button" onClick={onClose}><X size={18} /></button></div><div className="drawer-status"><Badge className={cn("status-badge", statusTone(job.status))}>{job.status}</Badge><span className="drawer-elapsed"><Clock3 size={13} /> {job.created_at || job.createdAt ? formatDate(job.created_at || job.createdAt) : "Elapsed time unavailable"}</span><button className="text-button" onClick={onRefresh}><RefreshCw size={14} /> Refresh</button></div><div className="drawer-progress"><div className="progress-meta"><span>Pipeline progress</span><strong>{progress}%</strong></div><Progress value={progress} /><span className="stage-label">Current stage · <b>{stage}</b></span></div><div className="pipeline-steps">{STAGES.map((item, index) => <div className={cn("pipeline-step", STAGES.indexOf(stage) >= index && "complete", item === stage && "current")} key={item}><span>{STAGES.indexOf(stage) > index ? <Check size={12} /> : index + 1}</span><label>{item}</label></div>)}</div><div className="drawer-section"><div className="section-label"><ScrollText size={14} /> Live logs</div><div className="log-box">{logs.length ? logs.map((line, index) => <div key={index}><span>{String(index + 1).padStart(2, "0")}</span>{line}</div>) : <div className="log-empty">Waiting for pipeline events…</div>}</div></div>{job.status === "passed" && <OutputBrowser job={job} />}</aside></div>; }
-function OutputBrowser({ job }: { job: Job }) { const formats: Record<string, string> = { "final_13min_spoken.mp4": "mp4", "pexels_ids.json": "pexels_ids", "diversity_check.json": "diversity_check", "scene_manifest_linear_fixed.json": "scene_manifest_linear_fixed" }; return <div className="drawer-section"><div className="section-label"><Download size={14} /> Output files</div><div className="output-list">{OUTPUTS.map(name => <a className="output-row" href={`${API_BASE}/api/v1/jobs/${job.id}/download/${formats[name]}`} target="_blank" rel="noreferrer" key={name}><div className="file-icon">{name.endsWith(".mp4") ? <Film size={15} /> : <FileJson size={15} />}</div><span>{name}</span><Download size={14} /></a>)}</div><div className="preview-wrap"><div className="section-label"><MonitorPlay size={14} /> Preview</div><video controls preload="metadata" src={`${API_BASE}/api/v1/jobs/${job.id}/download/mp4`} /></div></div>; }
-function SettingsView({ apiBase, setApiBase, voice, setVoice, model, setModel, apiKey, setApiKey, save }: any) { return <section className="page-section"><div className="page-heading"><div><div className="eyebrow">WORKSPACE / PREFERENCES</div><h1>Settings</h1><p>Keep your production defaults close and your credentials private.</p></div><button className="primary-button" onClick={save}><Check size={17} /> Save changes</button></div><div className="settings-grid"><div className="panel-card form-card"><div className="settings-title"><div className="settings-symbol"><KeyRound size={18} /></div><div><h2>Voice generation</h2><p>Defaults are saved locally in this browser.</p></div></div><label>API base URL</label><Input value={apiBase} onChange={e => setApiBase(e.target.value)} placeholder="http://91.99.162.143:8000" /><div className="field-hint">Direct browser endpoint; no proxy or backend changes.</div><label>ElevenLabs API key</label><Input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="sk_…" /><div className="field-hint">Used only by your configured generation workflow.</div><label>Default voice</label><Input value={voice} onChange={e => setVoice(e.target.value)} placeholder="Bella" /><label>Default model</label><select value={model} onChange={e => setModel(e.target.value)}><option>eleven_multilingual_v2</option><option>eleven_turbo_v2_5</option><option>eleven_flash_v2_5</option></select></div><div className="panel-card privacy-card"><div className="privacy-orb"><KeyRound size={25} /></div><h2>Designed for control.</h2><p>This interface calls the FastAPI backend directly. It does not proxy, modify, or deploy backend requests.</p><div className="privacy-line"><Check size={15} /> Direct API requests</div><div className="privacy-line"><Check size={15} /> Local browser preferences</div><div className="privacy-line"><Check size={15} /> Visible CORS errors</div></div></div></section>; }
+function Overview({ projectState, projects, activeProjects, drafts, latestProject, onNewProject, onViewProjects, onEditProject }: { projectState: LoadState; projects: Project[]; activeProjects: Project[]; drafts: Project[]; latestProject?: Project; onNewProject: () => void; onViewProjects: () => void; onEditProject: (project: Project) => void }) {
+  return <div className="page-wrap">
+    <section className="overview-hero"><div><span className="eyebrow">YOUR PRODUCTION HQ</span><h1>Make the work<br /><em>matter.</em></h1><p>Bring every video concept, workflow, and creative decision into one focused project space.</p></div><button className="action-button" onClick={onNewProject}><Plus size={17} /> New project <ArrowRight size={16} /></button></section>
+    <section className="metric-grid">
+      <Metric icon={FolderKanban} label="All projects" value={projectState === "loading" ? "—" : String(projects.length).padStart(2, "0")} tone="blue" />
+      <Metric icon={Gauge} label="Active projects" value={projectState === "loading" ? "—" : String(activeProjects.length).padStart(2, "0")} tone="teal" />
+      <Metric icon={Pencil} label="Draft concepts" value={projectState === "loading" ? "—" : String(drafts.length).padStart(2, "0")} tone="violet" />
+      <Metric icon={Sparkles} label="Latest update" value={projectState === "loading" ? "—" : latestProject ? formatProjectDate(latestProject.updatedAt || latestProject.createdAt).replace(/, \d{4}/, "") : "—"} tone="amber" />
+    </section>
+    <section className="overview-grid"><div className="surface-card recent-card"><div className="section-heading"><div><span className="eyebrow">PROJECT PULSE</span><h2>Recent projects</h2></div><button className="text-link" onClick={onViewProjects}>View all <ArrowRight size={14} /></button></div>
+      <ProjectContent state={projectState} projects={projects.slice(0, 4)} onNewProject={onNewProject} onEditProject={onEditProject} compact />
+    </div><div className="surface-card readiness-card"><div className="orbital"><div className="orbital-center"><Sparkles size={22} /></div><span /><span /><span /></div><span className="eyebrow">STUDIO SIGNAL</span><h2>Ready for your next frame.</h2><p>Create a project to capture a concept before it turns into a production schedule.</p><button className="soft-button" onClick={onNewProject}>Create a project <CirclePlus size={15} /></button></div></section>
+  </div>;
+}
+
+function ProjectsPage({ projects, state, onNewProject, onEditProject, onDeleteProject, onRetry }: { projects: Project[]; state: LoadState; onNewProject: () => void; onEditProject: (project: Project) => void; onDeleteProject: (project: Project) => void; onRetry: () => void }) {
+  return <div className="page-wrap projects-page"><section className="page-heading"><div><span className="eyebrow">CONTENT OPERATIONS</span><h1>Projects</h1><p>Organize the ideas, scripts, and creative direction behind your next release.</p></div><button className="action-button" onClick={onNewProject}><Plus size={17} /> New project</button></section><div className="surface-card project-table-card"><div className="project-table-head"><span>Project</span><span>Status</span><span>Last updated</span><span><button className="icon-action" onClick={onRetry} title="Refresh projects"><RefreshCw size={16} className={state === "loading" ? "spin" : ""} /></button></span></div><ProjectContent state={state} projects={projects} onNewProject={onNewProject} onEditProject={onEditProject} onDeleteProject={onDeleteProject} /></div></div>;
+}
+
+function ProjectContent({ state, projects, onNewProject, onEditProject, onDeleteProject, compact = false }: { state: LoadState; projects: Project[]; onNewProject: () => void; onEditProject: (project: Project) => void; onDeleteProject?: (project: Project) => void; compact?: boolean }) {
+  if (state === "loading") return <div className="project-loading"><Loader2 className="spin" size={19} /><span>Loading your projects…</span></div>;
+  if (state === "error") return <div className="project-empty"><AlertTriangle size={25} /><strong>Projects could not be loaded.</strong><span>The service is currently unavailable. Your local interface remains ready to retry.</span></div>;
+  if (!projects.length) return <div className="project-empty"><FolderKanban size={26} /><strong>No projects yet.</strong><span>Start with a concept, a name, and a clear direction.</span><button className="soft-button" onClick={onNewProject}><Plus size={15} /> Create first project</button></div>;
+  return <div className={cn("project-list", compact && "compact")}>{projects.map(project => <article className="project-row" key={project.id}><div className="project-icon"><FolderKanban size={17} /></div><div className="project-info"><strong>{project.name}</strong><span>{project.description || "No project description yet."}</span></div><StatusBadge status={project.status} /><time>{formatProjectDate(project.updatedAt || project.createdAt)}</time><div className="project-actions"><button className="icon-action" onClick={() => onEditProject(project)} title={`Edit ${project.name}`}><Pencil size={15} /></button>{onDeleteProject && <button className="icon-action destructive" onClick={() => onDeleteProject(project)} title={`Delete ${project.name}`}><Trash2 size={15} /></button>}</div></article>)}</div>;
+}
+
+function ProjectEditor({ project, session, onClose, onSaved }: { project?: Project; session: AuthSession; onClose: () => void; onSaved: (project: Project) => void }) {
+  const [form, setForm] = useState<ProjectInput>({ name: project?.name || "", description: project?.description || "", status: project?.status || "draft" });
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const update = <K extends keyof ProjectInput>(key: K, value: ProjectInput[K]) => setForm(current => ({ ...current, [key]: value }));
+  const save = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!form.name.trim()) { setError("A project name is required."); return; }
+    setSaving(true); setError("");
+    try {
+      const payload = await api<unknown>(project ? `/api/projects/${project.id}` : "/api/projects", apiInit(session, { method: project ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(projectPayload(form)) }));
+      const saved = extractProject(payload);
+      onSaved({ ...saved, id: saved.id || project?.id || "", name: saved.name || form.name.trim(), description: saved.description || form.description.trim(), status: saved.status || form.status });
+    } catch (requestError) { setError(friendlyApiError(requestError)); }
+    finally { setSaving(false); }
+  };
+  return <div className="modal-layer" role="presentation" onMouseDown={onClose}><form className="modal-card" onSubmit={save} onMouseDown={event => event.stopPropagation()}><div className="modal-head"><div><span className="eyebrow">{project ? "EDIT PROJECT" : "NEW PROJECT"}</span><h2>{project ? "Refine the brief." : "Set the direction."}</h2></div><button type="button" className="icon-action" onClick={onClose} aria-label="Close dialog"><X size={18} /></button></div>{error && <div className="inline-error"><AlertTriangle size={16} /><span>{error}</span></div>}<label className="field-label">Project name<input value={form.name} onChange={event => update("name", event.target.value)} placeholder="e.g. The creator economy report" maxLength={120} autoFocus /></label><label className="field-label">Creative direction<textarea value={form.description} onChange={event => update("description", event.target.value)} placeholder="What is this project designed to explore?" maxLength={600} /></label><label className="field-label">Project status<select value={form.status} onChange={event => update("status", event.target.value as ProjectStatus)}><option value="draft">Draft</option><option value="active">Active</option><option value="archived">Archived</option></select></label><div className="modal-actions"><button type="button" className="soft-button" onClick={onClose}>Cancel</button><button className="action-button" disabled={saving}>{saving ? <Loader2 className="spin" size={16} /> : <CheckCircle2 size={16} />}{saving ? "Saving…" : project ? "Save changes" : "Create project"}</button></div></form></div>;
+}
+
+function DeleteDialog({ project, session, onClose, onDeleted }: { project: Project; session: AuthSession; onClose: () => void; onDeleted: (id: string) => void }) {
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState("");
+  const confirm = async () => { setDeleting(true); setError(""); try { await api<unknown>(`/api/projects/${project.id}`, apiInit(session, { method: "DELETE" })); onDeleted(project.id); } catch (requestError) { setError(friendlyApiError(requestError)); setDeleting(false); } };
+  return <div className="modal-layer" role="presentation" onMouseDown={onClose}><div className="modal-card compact-modal" role="dialog" aria-modal="true" aria-labelledby="delete-title" onMouseDown={event => event.stopPropagation()}><div className="danger-mark"><Trash2 size={19} /></div><h2 id="delete-title">Delete “{project.name}”?</h2><p>This removes the project from the workspace. This action cannot be undone through this interface.</p>{error && <div className="inline-error"><AlertTriangle size={16} /><span>{error}</span></div>}<div className="modal-actions"><button className="soft-button" onClick={onClose} disabled={deleting}>Cancel</button><button className="danger-button" onClick={confirm} disabled={deleting}>{deleting ? <Loader2 size={16} className="spin" /> : <Trash2 size={16} />}{deleting ? "Deleting…" : "Delete project"}</button></div></div></div>;
+}
+
+function ServiceAlert({ message, onRetry }: { message: string; onRetry: () => void }) { return <div className="service-alert"><AlertTriangle size={18} /><div><strong>API service is unavailable</strong><span>{message}</span></div><button className="soft-button" onClick={onRetry}><RefreshCw size={14} /> Retry</button></div>; }
+function Metric({ icon: Icon, label, value, tone }: { icon: typeof FolderKanban; label: string; value: string; tone: string }) { return <div className="metric-card"><span className={cn("metric-icon", tone)}><Icon size={18} /></span><div><span>{label}</span><strong>{value}</strong></div></div>; }
+function StatusBadge({ status }: { status: ProjectStatus }) { return <span className={cn("status-badge", status)}>{status === "active" ? "Active" : status === "archived" ? "Archived" : "Draft"}</span>; }
+function NavButton({ icon: Icon, label, active, onClick, count }: { icon: typeof LayoutDashboard; label: string; active: boolean; onClick: () => void; count?: number }) { return <button className={cn("nav-button", active && "active")} onClick={onClick}><Icon size={17} /><span>{label}</span>{count !== undefined && <small>{count}</small>}</button>; }
+function Brand() { return <div className="brand-lockup"><span className="brand-mark"><Sparkles size={17} /></span><span><strong>FACELESS<span>FORGE</span></strong><small>STUDIO</small></span></div>; }
+function initials(user: ApiUser) { return user.name.split(" ").filter(Boolean).slice(0, 2).map(part => part[0]).join("").toUpperCase() || "FF"; }
