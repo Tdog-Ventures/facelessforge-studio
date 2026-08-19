@@ -16,7 +16,7 @@ For an HTTPS production build, use `.env.production` with the existing HTTPS pro
 VITE_API_BASE=https://facelessforge.ethinx.solutions/api/videoforge
 ```
 
-`.env.example` contains the local default and documents the production override. Vite injects the selected `VITE_API_BASE` value at build time; the client then calls `${VITE_API_BASE}/api/v1/...` directly from the browser.
+`.env.example` contains the local default and documents the production override. Vite injects the selected `VITE_API_BASE` value at build time; the client then calls `${VITE_API_BASE}/api/v1/...` directly from the browser. If a managed environment file is not mounted in an isolated preview, the client falls back to the direct development endpoint and rejects non-JSON responses so the Vite HTML shell cannot be mistaken for an API response.
 
 ## Local setup
 
