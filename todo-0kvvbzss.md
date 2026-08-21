@@ -8,3 +8,8 @@
 - [x] Provide accessible loading, API error, and unavailable-service states for all remote requests
 - [x] Add and run frontend-focused automated tests, type checks, and build validation
 - [x] Visually verify desktop and mobile layouts, then save a project checkpoint
+- [x] Inspect the existing project UI and external API contracts for a project detail workspace without modifying backend or environment files
+- [x] Add toast notifications for successful project creation, updates, and deletion
+- [x] Build a detailed project workspace view with project settings and specific metrics
+- [x] Provide loading, unavailable-service, and API-error states for project detail data
+- [x] Add and run automated coverage, type checks, build validation, visual verification, and a checkpoint for the workspace enhancements

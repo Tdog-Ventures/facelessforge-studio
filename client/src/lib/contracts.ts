@@ -18,6 +18,12 @@ export type Project = {
 
 export type ProjectInput = Pick<Project, "name" | "description" | "status">;
 
+export type ProjectWorkspaceMetric = {
+  label: string;
+  value: string;
+  detail: string;
+};
+
 export type AuthSession = {
   token?: string;
   user: ApiUser;
@@ -98,4 +104,18 @@ export function formatProjectDate(value?: string) {
   if (!value) return "Recently updated";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "Recently updated" : date.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" });
+}
+
+export function projectWorkspaceMetrics(project: Project): ProjectWorkspaceMetric[] {
+  const descriptionWords = project.description.trim() ? project.description.trim().split(/\s+/).length : 0;
+  const setupFields = [project.name.trim(), project.description.trim(), project.status !== "draft" ? project.status : ""].filter(Boolean).length;
+  const readiness = Math.round((setupFields / 3) * 100);
+  const created = project.createdAt ? new Date(project.createdAt) : undefined;
+  const ageInDays = created && !Number.isNaN(created.getTime()) ? Math.max(0, Math.floor((Date.now() - created.getTime()) / 86_400_000)) : null;
+
+  return [
+    { label: "Brief depth", value: descriptionWords ? `${descriptionWords} words` : "Not set", detail: "Creative direction" },
+    { label: "Setup progress", value: `${readiness}%`, detail: "Project essentials" },
+    { label: "Workspace age", value: ageInDays === null ? "Unknown" : ageInDays === 0 ? "Today" : `${ageInDays} days`, detail: "Since creation" },
+  ];
 }

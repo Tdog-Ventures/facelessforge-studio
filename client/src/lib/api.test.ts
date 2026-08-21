@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { friendlyApiError, getApiBase, withApiAuth } from "./api";
-import { extractProjects, extractSession, normalizeProject, projectPayload } from "./contracts";
+import { extractProjects, extractSession, normalizeProject, projectPayload, projectWorkspaceMetrics } from "./contracts";
 
 describe("FacelessForge API configuration", () => {
   it("uses the supplied Vite endpoint without a production fallback or browser override", () => {
@@ -30,5 +30,14 @@ describe("FacelessForge auth and project contracts", () => {
   it("builds a trimmed project payload for create and update requests", () => {
     expect(projectPayload({ name: "  Spring launch ", description: "  Research narrative  ", status: "draft" })).toEqual({ name: "Spring launch", description: "Research narrative", status: "draft" });
     expect(normalizeProject({ id: "p-1", name: "A", status: "unknown" }).status).toBe("draft");
+  });
+
+  it("derives workspace metrics from live project fields without invented activity data", () => {
+    const metrics = projectWorkspaceMetrics(normalizeProject({ id: "p-1", name: "Launch", description: "A focused launch brief", status: "active", created_at: new Date().toISOString() }));
+    expect(metrics).toMatchObject([
+      { label: "Brief depth", value: "4 words" },
+      { label: "Setup progress", value: "100%" },
+      { label: "Workspace age", value: "Today" },
+    ]);
   });
 });
