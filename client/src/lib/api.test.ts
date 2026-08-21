@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { friendlyApiError, getApiBase, withApiAuth } from "./api";
 import { extractProjects, extractSession, normalizeProject, projectPayload, projectWorkspaceMetrics } from "./contracts";
+import { extractJobs, jobProgress, jobsForProject, pipelineSummary } from "./jobs";
 
 describe("FacelessForge API configuration", () => {
   it("uses the supplied Vite endpoint without a production fallback or browser override", () => {
@@ -39,5 +40,29 @@ describe("FacelessForge auth and project contracts", () => {
       { label: "Setup progress", value: "100%" },
       { label: "Workspace age", value: "Today" },
     ]);
+  });
+});
+
+describe("FacelessForge pipeline metrics", () => {
+  const project = normalizeProject({ id: "project-1", name: "Launch campaign" });
+
+  it("normalizes and associates only explicitly linked jobs with a project", () => {
+    const jobs = extractJobs({ jobs: [
+      { id: "job-1", project_id: "project-1", status: "processing", progress: 40, topic: "Explainer" },
+      { id: "job-2", project_id: "other-project", status: "completed" },
+      { id: "job-3", status: "queued" },
+    ] });
+    expect(jobsForProject(jobs, project)).toEqual([expect.objectContaining({ id: "job-1", status: "running", progress: 40 })]);
+  });
+
+  it("derives pipeline summary values from real job states and progress", () => {
+    const jobs = extractJobs({ jobs: [
+      { id: "job-1", project_id: "project-1", status: "running", progress: 50 },
+      { id: "job-2", project_id: "project-1", status: "completed" },
+      { id: "job-3", project_id: "project-1", status: "failed", progress: 20 },
+    ] });
+    const summary = pipelineSummary(jobsForProject(jobs, project));
+    expect(summary).toMatchObject({ total: 3, running: 1, passed: 1, failed: 1, averageProgress: 57 });
+    expect(jobProgress(jobs[1]!)).toBe(100);
   });
 });

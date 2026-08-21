@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  AlertTriangle, ArrowLeft, ArrowRight, BarChart3, CalendarClock, CheckCircle2,
+  Activity, AlertTriangle, ArrowLeft, ArrowRight, BarChart3, CalendarClock, CheckCircle2, Clock3,
   ChevronRight, CirclePlus, FolderKanban, Gauge, LayoutDashboard, Loader2,
-  LogOut, Menu, Pencil, Plus, RefreshCw, Settings2, ShieldCheck, Sparkles,
+  LogOut, Menu, Pencil, Plus, RefreshCw, Settings2, ShieldCheck, Sparkles, Film,
   Trash2, Users, X,
 } from "lucide-react";
 import { api, friendlyApiError, withApiAuth } from "@/lib/api";
@@ -12,6 +12,7 @@ import {
   type ApiUser, type AuthSession, type Project, type ProjectInput, type ProjectStatus,
 } from "@/lib/contracts";
 import { cn } from "@/lib/utils";
+import { extractJobs, jobsForProject, jobProgress, pipelineSummary, type JobStatus, type PipelineJob } from "@/lib/jobs";
 
 type View = "overview" | "projects" | "workspace";
 type LoadState = "idle" | "loading" | "ready" | "error";
@@ -50,6 +51,9 @@ export default function Home() {
   const [projectDetail, setProjectDetail] = useState<Project | null>(null);
   const [workspaceState, setWorkspaceState] = useState<LoadState>("idle");
   const [workspaceError, setWorkspaceError] = useState("");
+  const [projectJobs, setProjectJobs] = useState<PipelineJob[]>([]);
+  const [jobState, setJobState] = useState<LoadState>("idle");
+  const [jobError, setJobError] = useState("");
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [editor, setEditor] = useState<{ project?: Project } | null>(null);
   const [deleting, setDeleting] = useState<Project | null>(null);
@@ -88,6 +92,21 @@ export default function Home() {
     }
   }, [loadProjects, session]);
 
+  const loadProjectJobs = useCallback(async (project: Project) => {
+    if (!session) return;
+    setJobState("loading");
+    setJobError("");
+    setProjectJobs([]);
+    try {
+      const payload = await api<unknown>("/api/v1/jobs?limit=100&offset=0", apiInit(session));
+      setProjectJobs(jobsForProject(extractJobs(payload), project));
+      setJobState("ready");
+    } catch (error) {
+      setJobState("error");
+      setJobError(friendlyApiError(error));
+    }
+  }, [session]);
+
   const loadProjectDetail = useCallback(async (project: Project) => {
     if (!session) return;
     setSelectedProject(project);
@@ -117,7 +136,7 @@ export default function Home() {
   const handleLogout = async () => {
     setIsMenuOpen(false);
     try { await api<unknown>("/api/auth/logout", apiInit(session, { method: "POST" })); } catch { /* Clear local state even if the API is down. */ }
-    finally { persistSession(null); setView("overview"); setSelectedProject(null); setProjectDetail(null); }
+    finally { persistSession(null); setView("overview"); setSelectedProject(null); setProjectDetail(null); setProjectJobs([]); setJobState("idle"); }
   };
 
   const activeProjects = projects.filter(project => project.status === "active");
@@ -141,7 +160,7 @@ export default function Home() {
   const deletedProject = (id: string) => {
     const removed = projects.find(project => project.id === id);
     setProjects(current => current.filter(project => project.id !== id));
-    if (selectedProject?.id === id) { setSelectedProject(null); setProjectDetail(null); setView("projects"); }
+    if (selectedProject?.id === id) { setSelectedProject(null); setProjectDetail(null); setProjectJobs([]); setJobState("idle"); setView("projects"); }
     setDeleting(null);
     showToast("Project deleted", `${removed?.name || "The project"} was removed from the workspace.`);
   };
@@ -169,9 +188,9 @@ export default function Home() {
         <button className={cn("service-indicator", projectState === "error" && "is-offline")} onClick={() => void loadProjects()} title="Refresh projects">{projectState === "loading" ? <Loader2 size={13} className="spin" /> : <span />}{projectState === "error" ? "Service offline" : projectState === "loading" ? "Loading" : "API connected"}</button>
       </header>
       {projectState === "error" && <ServiceAlert message={projectError} onRetry={() => void loadProjects()} />}
-      {view === "overview" && <Overview projectState={projectState} projects={projects} activeProjects={activeProjects} drafts={drafts} latestProject={latestProject} onNewProject={() => setEditor({})} onViewProjects={() => setView("projects")} onEditProject={project => setEditor({ project })} onOpenProject={project => void loadProjectDetail(project)} />}
-      {view === "projects" && <ProjectsPage projects={projects} state={projectState} onNewProject={() => setEditor({})} onEditProject={project => setEditor({ project })} onOpenProject={project => void loadProjectDetail(project)} onDeleteProject={setDeleting} onRetry={() => void loadProjects()} />}
-      {view === "workspace" && workspaceProject && <ProjectWorkspace project={workspaceProject} state={workspaceState} error={workspaceError} onBack={() => setView("projects")} onRefresh={() => void loadProjectDetail(workspaceProject)} onEdit={() => setEditor({ project: workspaceProject })} onDelete={() => setDeleting(workspaceProject)} />}
+      {view === "overview" && <Overview projectState={projectState} projects={projects} activeProjects={activeProjects} drafts={drafts} latestProject={latestProject} onNewProject={() => setEditor({})} onViewProjects={() => setView("projects")} onEditProject={project => setEditor({ project })} onOpenProject={project => { void loadProjectDetail(project); void loadProjectJobs(project); }} />}
+      {view === "projects" && <ProjectsPage projects={projects} state={projectState} onNewProject={() => setEditor({})} onEditProject={project => setEditor({ project })} onOpenProject={project => { void loadProjectDetail(project); void loadProjectJobs(project); }} onDeleteProject={setDeleting} onRetry={() => void loadProjects()} />}
+      {view === "workspace" && workspaceProject && <><ProjectWorkspace project={workspaceProject} state={workspaceState} error={workspaceError} onBack={() => setView("projects")} onRefresh={() => { void loadProjectDetail(workspaceProject); void loadProjectJobs(workspaceProject); }} onEdit={() => setEditor({ project: workspaceProject })} onDelete={() => setDeleting(workspaceProject)} /><section className="page-wrap workspace-pipeline-wrap"><ProjectPipelineMetrics jobs={projectJobs} state={jobState} error={jobError} onRetry={() => void loadProjectJobs(workspaceProject)} /></section></>}
     </main>
     {editor && <ProjectEditor project={editor.project} session={session} onClose={() => setEditor(null)} onSaved={savedProject} />}
     {deleting && <DeleteDialog project={deleting} session={session} onClose={() => setDeleting(null)} onDeleted={deletedProject} />}
@@ -209,6 +228,15 @@ function ProjectWorkspace({ project, state, error, onBack, onRefresh, onEdit, on
   const metrics = projectWorkspaceMetrics(project);
   return <div className="page-wrap workspace-page"><button className="back-link" onClick={onBack}><ArrowLeft size={15} /> All projects</button><section className="workspace-hero"><div><div className="workspace-project-mark"><FolderKanban size={21} /></div><span className="eyebrow">PROJECT WORKSPACE</span><h1>{project.name}</h1><p>{project.description || "This project has no creative direction yet. Add one in project settings to shape the next production step."}</p><div className="workspace-meta"><StatusBadge status={project.status} /><span>Created {formatProjectDate(project.createdAt)}</span><span>Updated {formatProjectDate(project.updatedAt)}</span></div></div><div className="workspace-actions"><button className="soft-button" onClick={onRefresh}>{state === "loading" ? <Loader2 size={15} className="spin" /> : <RefreshCw size={15} />} Refresh</button><button className="action-button" onClick={onEdit}><Settings2 size={16} /> Project settings</button></div></section>{state === "error" && <div className="workspace-alert"><AlertTriangle size={17} /><div><strong>Project detail could not be refreshed</strong><span>{error}</span></div><button className="soft-button" onClick={onRefresh}>Retry</button></div>}<section className="workspace-metric-grid">{metrics.map((metric, index) => <div className="workspace-metric" key={metric.label}><span className={cn("workspace-metric-icon", `metric-${index}`)}>{index === 0 ? <BarChart3 size={18} /> : index === 1 ? <CheckCircle2 size={18} /> : <CalendarClock size={18} />}</span><div><small>{metric.label}</small><strong>{state === "loading" ? "…" : metric.value}</strong><span>{metric.detail}</span></div></div>)}</section><section className="workspace-grid"><div className="surface-card workspace-brief"><div className="section-heading"><div><span className="eyebrow">CREATIVE DIRECTION</span><h2>Project brief</h2></div><button className="text-link" onClick={onEdit}>Edit settings <ArrowRight size={14} /></button></div><div className={cn("brief-content", !project.description && "is-empty")}>{project.description ? <p>{project.description}</p> : <><Sparkles size={22} /><strong>Give the project a stronger signal.</strong><span>A concise creative direction makes it easier to align every production decision.</span><button className="soft-button" onClick={onEdit}><Pencil size={14} /> Add creative direction</button></>}</div></div><aside className="surface-card workspace-settings"><div className="section-heading"><div><span className="eyebrow">PROJECT CONTROL</span><h2>Settings</h2></div><Settings2 size={17} className="settings-heading-icon" /></div><dl className="setting-list"><div><dt>Project status</dt><dd><StatusBadge status={project.status} /></dd></div><div><dt>Project ID</dt><dd className="mono-value">{project.id}</dd></div><div><dt>Created</dt><dd>{formatProjectDate(project.createdAt)}</dd></div><div><dt>Last updated</dt><dd>{formatProjectDate(project.updatedAt)}</dd></div></dl><button className="soft-button full-settings-button" onClick={onEdit}><Settings2 size={15} /> Edit project settings</button><button className="delete-link" onClick={onDelete}><Trash2 size={14} /> Delete project</button></aside></section></div>;
 }
+
+function ProjectPipelineMetrics({ jobs, state, error, onRetry }: { jobs: PipelineJob[]; state: LoadState; error: string; onRetry: () => void }) {
+  const summary = pipelineSummary(jobs);
+  const recentJobs = [...jobs].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "")).slice(0, 4);
+  return <section className="surface-card pipeline-metrics-card"><div className="section-heading"><div><span className="eyebrow">LIVE PIPELINE</span><h2>Job metrics</h2></div><button className="icon-action" onClick={onRetry} title="Refresh pipeline metrics">{state === "loading" ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}</button></div>{state === "loading" ? <div className="pipeline-loading"><Loader2 className="spin" size={18} /><span>Loading linked pipeline jobs…</span></div> : state === "error" ? <div className="pipeline-state pipeline-error"><AlertTriangle size={22} /><strong>Pipeline metrics could not be loaded.</strong><span>{error}</span><button className="soft-button" onClick={onRetry}><RefreshCw size={14} /> Retry</button></div> : !summary.total ? <div className="pipeline-state"><Film size={23} /><strong>No linked pipeline jobs yet.</strong><span>Jobs appear here only when the API associates them with this project.</span></div> : <><div className="pipeline-summary-grid"><PipelineStat icon={Film} label="All jobs" value={String(summary.total)} tone="blue" /><PipelineStat icon={Activity} label="In progress" value={String(summary.running + summary.queued)} tone="teal" /><PipelineStat icon={CheckCircle2} label="Completed" value={String(summary.passed)} tone="mint" /><PipelineStat icon={AlertTriangle} label="Failed" value={String(summary.failed)} tone="coral" /></div><div className="pipeline-progress"><div><span>Average pipeline progress</span><strong>{summary.averageProgress}%</strong></div><div className="pipeline-progress-track"><span style={{ width: `${summary.averageProgress}%` }} /></div></div><div className="pipeline-job-list"><div className="pipeline-job-head"><span>Recent job</span><span>Status</span><span>Progress</span></div>{recentJobs.map(job => <div className="pipeline-job-row" key={job.id}><div><strong>{job.topic || `Pipeline job ${job.id.slice(0, 8)}`}</strong><span>{job.stage || job.platform || "Pipeline stage pending"} · {job.createdAt ? formatProjectDate(job.createdAt) : "Recently created"}</span></div><JobStatusBadge status={job.status} /><div className="job-progress-cell"><span>{jobProgress(job)}%</span><div className="job-progress-track"><i style={{ width: `${jobProgress(job)}%` }} /></div></div></div>)}</div></>}</section>;
+}
+
+function PipelineStat({ icon: Icon, label, value, tone }: { icon: typeof Film; label: string; value: string; tone: string }) { return <div className="pipeline-stat"><span className={cn("pipeline-stat-icon", tone)}><Icon size={16} /></span><div><small>{label}</small><strong>{value}</strong></div></div>; }
+function JobStatusBadge({ status }: { status: JobStatus }) { return <span className={cn("job-status-badge", status)}>{status === "running" ? "Running" : status === "passed" ? "Passed" : status === "failed" ? "Failed" : "Queued"}</span>; }
 
 function ProjectEditor({ project, session, onClose, onSaved }: { project?: Project; session: AuthSession; onClose: () => void; onSaved: (project: Project) => void }) {
   const [form, setForm] = useState<ProjectInput>({ name: project?.name || "", description: project?.description || "", status: project?.status || "draft" });

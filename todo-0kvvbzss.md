@@ -13,3 +13,8 @@
 - [x] Build a detailed project workspace view with project settings and specific metrics
 - [x] Provide loading, unavailable-service, and API-error states for project detail data
 - [x] Add and run automated coverage, type checks, build validation, visual verification, and a checkpoint for the workspace enhancements
+- [x] Inspect existing job API contracts and determine compatible project-scoped metrics without backend or environment changes
+- [x] Load pipeline and job data into the detailed project workspace using existing API routes
+- [x] Present real project job counts, statuses, pipeline progress, and recent runs without inventing activity data
+- [x] Provide job-metric loading, empty, and unavailable-service states in the workspace
+- [x] Add automated coverage, run validation and visual checks, then save a checkpoint for the pipeline metrics enhancement
