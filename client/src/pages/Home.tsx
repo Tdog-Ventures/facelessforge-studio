@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   Activity, AlertTriangle, ArrowLeft, ArrowRight, BarChart3, CalendarClock, CheckCircle2, Clock3,
   ChevronRight, CirclePlus, FolderKanban, Gauge, LayoutDashboard, Loader2,
@@ -12,7 +12,7 @@ import {
   type ApiUser, type AuthSession, type Project, type ProjectInput, type ProjectStatus,
 } from "@/lib/contracts";
 import { cn } from "@/lib/utils";
-import { extractJobs, jobsForProject, jobProgress, pipelineSummary, type JobStatus, type PipelineJob } from "@/lib/jobs";
+import { extractJobs, failureReason, failureTooltipId, filterJobsByStatus, jobsForProject, jobProgress, pipelineSummary, type JobStatus, type JobStatusFilter, type PipelineJob } from "@/lib/jobs";
 
 type View = "overview" | "projects" | "workspace";
 type LoadState = "idle" | "loading" | "ready" | "error";
@@ -144,6 +144,7 @@ export default function Home() {
   const latestProject = [...projects].sort((a, b) => (b.updatedAt || b.createdAt || "").localeCompare(a.updatedAt || a.createdAt || ""))[0];
   const workspaceProject = projectDetail || selectedProject;
 
+  if (import.meta.env.DEV && new URLSearchParams(window.location.search).get("tooltipPreview") === "1") return <FailureTooltipPreview />;
   if (!session) return <AuthScreen onAuthenticated={persistSession} />;
 
   const savedProject = (project: Project) => {
@@ -230,13 +231,23 @@ function ProjectWorkspace({ project, state, error, onBack, onRefresh, onEdit, on
 }
 
 function ProjectPipelineMetrics({ jobs, state, error, onRetry }: { jobs: PipelineJob[]; state: LoadState; error: string; onRetry: () => void }) {
+  const [statusFilter, setStatusFilter] = useState<JobStatusFilter>("all");
   const summary = pipelineSummary(jobs);
-  const recentJobs = [...jobs].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "")).slice(0, 4);
-  return <section className="surface-card pipeline-metrics-card"><div className="section-heading"><div><span className="eyebrow">LIVE PIPELINE</span><h2>Job metrics</h2></div><button className="icon-action" onClick={onRetry} title="Refresh pipeline metrics">{state === "loading" ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}</button></div>{state === "loading" ? <div className="pipeline-loading"><Loader2 className="spin" size={18} /><span>Loading linked pipeline jobs…</span></div> : state === "error" ? <div className="pipeline-state pipeline-error"><AlertTriangle size={22} /><strong>Pipeline metrics could not be loaded.</strong><span>{error}</span><button className="soft-button" onClick={onRetry}><RefreshCw size={14} /> Retry</button></div> : !summary.total ? <div className="pipeline-state"><Film size={23} /><strong>No linked pipeline jobs yet.</strong><span>Jobs appear here only when the API associates them with this project.</span></div> : <><div className="pipeline-summary-grid"><PipelineStat icon={Film} label="All jobs" value={String(summary.total)} tone="blue" /><PipelineStat icon={Activity} label="In progress" value={String(summary.running + summary.queued)} tone="teal" /><PipelineStat icon={CheckCircle2} label="Completed" value={String(summary.passed)} tone="mint" /><PipelineStat icon={AlertTriangle} label="Failed" value={String(summary.failed)} tone="coral" /></div><div className="pipeline-progress"><div><span>Average pipeline progress</span><strong>{summary.averageProgress}%</strong></div><div className="pipeline-progress-track"><span style={{ width: `${summary.averageProgress}%` }} /></div></div><div className="pipeline-job-list"><div className="pipeline-job-head"><span>Recent job</span><span>Status</span><span>Progress</span></div>{recentJobs.map(job => <div className="pipeline-job-row" key={job.id}><div><strong>{job.topic || `Pipeline job ${job.id.slice(0, 8)}`}</strong><span>{job.stage || job.platform || "Pipeline stage pending"} · {job.createdAt ? formatProjectDate(job.createdAt) : "Recently created"}</span></div><JobStatusBadge status={job.status} /><div className="job-progress-cell"><span>{jobProgress(job)}%</span><div className="job-progress-track"><i style={{ width: `${jobProgress(job)}%` }} /></div></div></div>)}</div></>}</section>;
+  const recentJobs = filterJobsByStatus([...jobs].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "")), statusFilter).slice(0, 4);
+  return <section className="surface-card pipeline-metrics-card"><div className="section-heading"><div><span className="eyebrow">LIVE PIPELINE</span><h2>Job metrics</h2></div><div className="pipeline-heading-actions"><label className="pipeline-filter-label">Show<select aria-label="Filter recent pipeline jobs by status" value={statusFilter} onChange={event => setStatusFilter(event.target.value as JobStatusFilter)}><option value="all">All statuses</option><option value="queued">Queued</option><option value="running">Running</option><option value="passed">Completed</option><option value="failed">Failed</option></select></label><button className="icon-action" onClick={onRetry} title="Refresh pipeline metrics">{state === "loading" ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}</button></div></div>{state === "loading" ? <div className="pipeline-loading"><Loader2 className="spin" size={18} /><span>Loading linked pipeline jobs…</span></div> : state === "error" ? <div className="pipeline-state pipeline-error"><AlertTriangle size={22} /><strong>Pipeline metrics could not be loaded.</strong><span>{error}</span><button className="soft-button" onClick={onRetry}><RefreshCw size={14} /> Retry</button></div> : !summary.total ? <div className="pipeline-state"><Film size={23} /><strong>No linked pipeline jobs yet.</strong><span>Jobs appear here only when the API associates them with this project.</span></div> : <><div className="pipeline-summary-grid"><PipelineStat icon={Film} label="All jobs" value={String(summary.total)} tone="blue" /><PipelineStat icon={Activity} label="In progress" value={String(summary.running + summary.queued)} tone="teal" /><PipelineStat icon={CheckCircle2} label="Completed" value={String(summary.passed)} tone="mint" /><PipelineStat icon={AlertTriangle} label="Failed" value={String(summary.failed)} tone="coral" /></div><div className="pipeline-progress"><div><span>Average pipeline progress</span><strong>{summary.averageProgress}%</strong></div><div className="pipeline-progress-track"><span style={{ width: `${summary.averageProgress}%` }} /></div></div><div className="pipeline-job-list"><div className="pipeline-job-head"><span>Recent job</span><span>Status</span><span>Progress</span></div>{recentJobs.length ? recentJobs.map(job => <div className="pipeline-job-row" key={job.id}><div><strong>{job.topic || `Pipeline job ${job.id.slice(0, 8)}`}</strong><span>{job.stage || job.platform || "Pipeline stage pending"} · {job.createdAt ? formatProjectDate(job.createdAt) : "Recently created"}</span></div><JobStatusBadge status={job.status} tooltipId={job.status === "failed" ? failureTooltipId(job.id) : undefined} errorReason={job.status === "failed" ? failureReason(job) : undefined} /><div className="job-progress-cell"><span>{jobProgress(job)}%</span><div className="job-progress-track"><i style={{ width: `${jobProgress(job)}%` }} /></div></div></div>) : <div className="pipeline-filter-empty">No {statusFilter === "all" ? "recent" : statusFilter} jobs match this filter.</div>}</div></>}</section>;
 }
 
 function PipelineStat({ icon: Icon, label, value, tone }: { icon: typeof Film; label: string; value: string; tone: string }) { return <div className="pipeline-stat"><span className={cn("pipeline-stat-icon", tone)}><Icon size={16} /></span><div><small>{label}</small><strong>{value}</strong></div></div>; }
-function JobStatusBadge({ status }: { status: JobStatus }) { return <span className={cn("job-status-badge", status)}>{status === "running" ? "Running" : status === "passed" ? "Passed" : status === "failed" ? "Failed" : "Queued"}</span>; }
+function FailureTooltipPreview() {
+  const tooltipId = failureTooltipId("preview-failed-job");
+  return <div className="tooltip-preview-shell"><div className="tooltip-preview-card"><span className="eyebrow">DEVELOPMENT PREVIEW</span><h1>Failed recent-run tooltip</h1><p>Deterministic preview for hover and keyboard-focus verification. This route is available only in development mode.</p><div className="failure-tooltip-wrap is-preview-visible"><JobStatusBadge status="failed" tooltipId={tooltipId} errorReason="Encoding failed: source video could not be decoded." /></div><span className="tooltip-preview-note">Hover or focus the Failed badge in the live preview to verify the same reason text.</span></div></div>;
+}
+
+export function JobStatusBadge({ status, tooltipId, errorReason }: { status: JobStatus; tooltipId?: string; errorReason?: string }) {
+  const label = status === "running" ? "Running" : status === "passed" ? "Passed" : status === "failed" ? "Failed" : "Queued";
+  if (errorReason && tooltipId) return <span className="failure-tooltip-wrap"><span className={cn("job-status-badge", status)} tabIndex={0} aria-describedby={tooltipId}>{label}</span><span id={tooltipId} className="pipeline-failure-tooltip" role="tooltip">{errorReason}</span></span>;
+  return <span className={cn("job-status-badge", status)}>{label}</span>;
+}
 
 function ProjectEditor({ project, session, onClose, onSaved }: { project?: Project; session: AuthSession; onClose: () => void; onSaved: (project: Project) => void }) {
   const [form, setForm] = useState<ProjectInput>({ name: project?.name || "", description: project?.description || "", status: project?.status || "draft" });

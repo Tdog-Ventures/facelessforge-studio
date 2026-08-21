@@ -49,3 +49,13 @@
 - [x] Update `client/src/lib/api.ts` to follow the confirmed environment-only dev/prod endpoint strategy, then rerun tests and build
 - [x] Update README setup documentation with the development direct endpoint and production HTTPS proxy override
 - [x] Confirm `client/src/lib/api.ts` uses the revised environment strategy without contacting any backend during verification
+
+## Recent-run state controls
+
+- [x] Give each failed-job tooltip a unique ID so multiple failed rows have valid aria-describedby targets
+- [x] Add a UI/component test that renders a failed recent-run badge and verifies tooltip markup, hover/focus CSS selectors, and keyboard focus affordance
+- [x] Add a development-only deterministic failed-job tooltip preview harness with hover and focus states
+- [x] Capture explicit preview evidence for the failed tooltip content and visibility states
+- [x] Add a status filter dropdown for recent-run states with all, queued, running, completed, and failed options
+- [x] Add tests for recent-run filtering and failure-reason extraction
+- [x] Run typecheck, tests, production build, and visual verification
