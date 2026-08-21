@@ -13,6 +13,7 @@ export type PipelineJob = {
   platform?: string;
   createdAt?: string;
   errorReason?: string;
+  failureDetailsState?: "loading" | "ready" | "unavailable";
 };
 
 export type PipelineSummary = {
@@ -40,11 +41,33 @@ function readText(...values: unknown[]) {
 }
 
 export function failureReason(job: PipelineJob) {
+  if (job.failureDetailsState === "loading") return "Loading failure details…";
+  if (job.failureDetailsState === "unavailable" && !job.errorReason) return "Failure details unavailable; job logs could not be loaded.";
   return job.errorReason || "The pipeline reported a failure without a specific reason.";
 }
 
 export function failureTooltipId(jobId: string) {
   return `pipeline-failure-tooltip-${jobId.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
+}
+
+export function extractFailureReasonFromLogs(value: unknown) {
+  const payload = asRecord(value);
+  const records: unknown[] = Array.isArray(value)
+    ? value as unknown[]
+    : Array.isArray(payload.logs)
+      ? payload.logs as unknown[]
+      : Array.isArray(payload.data)
+        ? payload.data as unknown[]
+        : Array.isArray(asRecord(payload.data).logs)
+          ? asRecord(payload.data).logs as unknown[]
+          : [];
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const record = asRecord(records[index]);
+    const level = String(record.level ?? record.severity ?? "").toLowerCase();
+    const text = readText(record.message, record.detail, record.error, record.reason, typeof records[index] === "string" ? records[index] : undefined);
+    if (text && (level === "error" || /error|fail|exception|timeout|unable|could not/i.test(text))) return text;
+  }
+  return undefined;
 }
 
 export function normalizeJob(value: unknown): PipelineJob {
@@ -65,6 +88,7 @@ export function normalizeJob(value: unknown): PipelineJob {
     platform: typeof job.platform === "string" ? job.platform : undefined,
     createdAt: typeof job.created_at === "string" ? job.created_at : typeof job.createdAt === "string" ? job.createdAt : undefined,
     errorReason: status === "failed" ? readText(job.error, job.error_message, job.failure_reason, job.failureReason, job.message, asRecord(job.result).error) : undefined,
+    failureDetailsState: status === "failed" ? "ready" : undefined,
   };
 }
 

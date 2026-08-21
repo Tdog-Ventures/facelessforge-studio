@@ -59,3 +59,12 @@
 - [x] Add a status filter dropdown for recent-run states with all, queued, running, completed, and failed options
 - [x] Add tests for recent-run filtering and failure-reason extraction
 - [x] Run typecheck, tests, production build, and visual verification
+
+## Workspace interaction and recent-run expansion
+
+- [x] Add a real authenticated Home-flow integration test that seeds a session, loads projects/jobs, opens a workspace, changes the filter, and verifies visible rows
+- [x] Keep a development-only authenticated workspace preview harness for deterministic local verification
+- [x] Fetch and normalize `/api/v1/jobs/{job_id}/logs` details for failed jobs without changing backend behavior
+- [x] Add explicit failed-tooltip loading UI and an unavailable-details fallback while job logs are being fetched
+- [x] Add progressive pagination or a show-more control for recent-run states beyond the initial page
+- [x] Run tests, typecheck, production build, and visual verification

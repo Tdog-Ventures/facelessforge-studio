@@ -12,6 +12,11 @@ describe("recent pipeline jobs", () => {
     expect(failureReason(normalizeJob({ id: "failed-2", status: "failed" }))).toContain("without a specific reason");
   });
 
+  it("surfaces explicit log loading and unavailable states", () => {
+    expect(failureReason({ id: "loading", status: "failed", failureDetailsState: "loading" })).toBe("Loading failure details…");
+    expect(failureReason({ id: "unavailable", status: "failed", failureDetailsState: "unavailable" })).toContain("job logs could not be loaded");
+  });
+
   it("creates unique safe tooltip IDs for multiple failed rows", () => {
     expect(failureTooltipId("failed/one")).toBe("pipeline-failure-tooltip-failed-one");
     expect(failureTooltipId("failed/two")).not.toBe(failureTooltipId("failed/one"));
